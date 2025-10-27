@@ -1,0 +1,4 @@
+data/
+db/
+.venv430/
+__pycache__/
