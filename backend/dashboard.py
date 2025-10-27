@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 from sqlalchemy import create_engine
+from flask import Flask, render_template, send_from_directory
 from dash import Dash, dcc, html, Input, Output
 import plotly.express as px
 import plotly.graph_objects as go
@@ -9,7 +10,32 @@ import plotly.graph_objects as go
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://localhost:5432/scooter_db")
 engine = create_engine(DATABASE_URL)
 
-# Define a color map for the vendors
+# --- Flask setup for frontend ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FRONTEND_DIR = os.path.join(BASE_DIR, "../frontend")
+
+server = Flask(
+    __name__,
+    template_folder=FRONTEND_DIR,
+    static_folder=FRONTEND_DIR
+)
+
+@server.route("/")
+def home():
+    return render_template("frontpage.html")
+
+@server.route("/frontend/<path:filename>")
+def serve_frontend_files(filename):
+    return send_from_directory(FRONTEND_DIR, filename)
+
+# --- Dash App setup ---
+app = Dash(
+    __name__,
+    server=server,
+    url_base_pathname="/dashboard/"   # dashboard lives under /dashboard
+)
+
+# --- Color Map ---
 COLOR_MAP = {
     "Lyft": "blue",
     "Link": "red",
@@ -57,7 +83,6 @@ def fetch_avg_distance_per_hour(vendor=None, min_trip_count=50, max_avg_distance
     ORDER BY vendor, hour;
     """
     df = pd.read_sql(query, engine)
-    # remove outlier avg_distance
     df = df[df['avg_distance'] <= max_avg_distance]
     return df
 
@@ -75,9 +100,7 @@ def fetch_trip_locations(vendor=None, limit=10000):
     """
     return pd.read_sql(query, engine)
 
-# --- Dash App setup ---
-app = Dash(__name__)
-
+# --- Dash Layout ---
 app.layout = html.Div([
     html.H1("E-Scooter Usage Dashboard (Chicago)"),
     dcc.Dropdown(
@@ -159,18 +182,8 @@ def update_avg_distance_hour_chart(selected_vendor):
     Input('vendor-dropdown', 'value')
 )
 def update_location_heatmap(selected_vendor):
-    # fetch all or filtered based on vendor
     df_all = fetch_trip_locations(vendor=None, limit=10000)
     fig = go.Figure()
-
-    # vendor color map
-    COLOR_MAP = {
-        "Lyft": "blue",
-        "Link": "red",
-        "Lime": "green",
-        "Spin": "purple"
-    }
-
     for vendor, color in COLOR_MAP.items():
         if selected_vendor and vendor != selected_vendor:
             continue
@@ -182,21 +195,22 @@ def update_location_heatmap(selected_vendor):
             lon=df_sub['lon'].tolist(),
             radius=20,
             name=vendor,
-            # each trace needs colorscale – here using single-color ramp
             colorscale=[[0, color], [1, color]],
             opacity=0.6,
             hovertemplate=f"{vendor}<br>Lat: %{{lat}}<br>Lon: %{{lon}}<extra></extra>"
         ))
 
     fig.update_layout(
-        map_style="open-street-map",
-        map_center=dict(lat=41.8781, lon=-87.6298),
-        map_zoom=11,
+        map=dict(
+            style="open-street-map",
+            center=dict(lat=41.8781, lon=-87.6298),
+            zoom=11
+        ),
         margin={"r":0,"t":30,"l":0,"b":0},
         legend_title="Vendor"
     )
     return fig
 
-
+# --- Run Server ---
 if __name__ == '__main__':
     app.run(debug=True)
