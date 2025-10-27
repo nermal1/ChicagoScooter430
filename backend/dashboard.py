@@ -28,14 +28,12 @@ def home():
 def serve_frontend_files(filename):
     return send_from_directory(FRONTEND_DIR, filename)
 
-# --- Dash App setup ---
 app = Dash(
     __name__,
     server=server,
-    url_base_pathname="/dashboard/"   # dashboard lives under /dashboard
+    url_base_pathname="/dashboard/"  
 )
 
-# --- Color Map ---
 COLOR_MAP = {
     "Lyft": "blue",
     "Link": "red",
@@ -43,7 +41,6 @@ COLOR_MAP = {
     "Spin": "purple"
 }
 
-# --- Helper functions to get data ---
 def fetch_provider_summary():
     query = """
     SELECT vendor,
@@ -100,7 +97,6 @@ def fetch_trip_locations(vendor=None, limit=10000):
     """
     return pd.read_sql(query, engine)
 
-# --- Dash Layout ---
 app.layout = html.Div([
     html.H1("E-Scooter Usage Dashboard (Chicago)"),
     dcc.Dropdown(
@@ -116,7 +112,6 @@ app.layout = html.Div([
     dcc.Graph(id='trip-location-map')
 ])
 
-# --- Callbacks ---
 @app.callback(
     Output('summary-cards', 'children'),
     Input('vendor-dropdown', 'value')
@@ -211,6 +206,5 @@ def update_location_heatmap(selected_vendor):
     )
     return fig
 
-# --- Run Server ---
 if __name__ == '__main__':
     app.run(debug=True)
