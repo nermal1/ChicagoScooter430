@@ -30,7 +30,7 @@ if CREWAI_AVAILABLE and os.getenv("GROQ_API_KEY"):
     except Exception as e:
         print(f"Failed to initialize Groq LLM: {e}")
 else:
-    print("⚠️ GROQ_API_KEY not found in environment")
+    print("GROQ_API_KEY not found in environment")
 
 @tool
 def execute_sql_query(query: str) -> str:
@@ -108,6 +108,7 @@ def create_agents():
     if not CREWAI_AVAILABLE or not llm:
         raise ImportError("CrewAI is not installed or LLM not configured.")
 
+    # Agent will generate queries based on the users question
     sql_agent = Agent(
         role="SQL Query Expert",
         goal=(
@@ -124,7 +125,7 @@ def create_agents():
         verbose=True,
         allow_delegation=False
     )
-
+    # Agent will execute the query made from the previous agent 
     executor_agent = Agent(
         role="Database Query Executor",
         goal="Execute SQL queries safely and return clean, formatted results.",
@@ -137,18 +138,20 @@ def create_agents():
         verbose=True,
         allow_delegation=False
     )
-
+    # Agent answers the users question based on the SQL data
     analyst_agent = Agent(
         role="Data Analyst",
-        goal=
-            "Provide a consice, user-friendly answer to the users question"
-            "based on the SQL data. your goal is supposed to be brief and get right to the point"
-            "Do not write long, repetitive reports",
+        goal=(
+            "Provide a concise, user-friendly answer to the user's question "
+            "based *only* on the provided SQL data. Your goal is to be brief and "
+            "get right to the point. Do not write long, repetitive reports."
+        ),
         backstory=(
-            "You are a friendly data assistant. You give the main answer first"
-            "Then one or two simple sentence of explanation"
-            "You avoid jargon and unecessary statistics"
-            "You get straight to the point"
+            "You are a 'no-nonsense' data analyst assistant. You get straight to the point. "
+            "You give the main answer first, then stop. "
+            "You **NEVER** repeat the question or the answer. "
+            "You **NEVER** use phrases like 'This means that...', 'This indicates that...', 'The data shows...', or 'As per the query...'. "
+            "You just state the final fact, naturally."
         ),
         tools=[],
         llm=llm,
@@ -162,6 +165,7 @@ def create_crew(question: str, units: str):
     """Create the multi-agent Crew pipeline for a specific question."""
     sql_agent, executor_agent, analyst_agent = create_agents()
 
+    # Allows for unit differentiation automatically based on what the user selects via the frontend
     if units == 'imperial':
         unit_pref_sql = (
             "1. For temperature, use the 'temperature_f' column.\n"
@@ -182,22 +186,42 @@ def create_crew(question: str, units: str):
         )
 
     # Task 1: Generate SQL
+    # Try to limit token usage from LLM so we can get more usage 
     task1 = Task(
         description=(
             f"User question: {question}\n\n"
             f"**CRITICAL: The user's system preference is for these units:** {unit_pref_sql}\n\n"
-            "Steps:\n"
+
+            "Follow these to prevent errors\n"
+            "1. **YOU MUST NOT** use `SELECT *`.\n"
+            "2. **You MUST** write an aggregate query using (`GROUP BY`, `COUNT`, `AVG`, `SUM`, etc.) "
+               "if the user is asking a 'how many', 'what is the average', 'which is busier', or comparative question.\n"
+            "3. Your goal is to return the **smallest, most summarized data** possible that directly answers the question. "
+               "Do not return raw, unfiltered rows.\n"
+            "   - **Good Example (for 'busier'):** `SELECT DAYNAME(start_time), COUNT(*) FROM ... GROUP BY DAYNAME(start_time)`\n"
+            "   - **Bad Example (for 'busier'):** `SELECT * FROM ...`\n"
+            "   - **Good Example (for 'average'):** `SELECT AVG(temperature_f) FROM ...`\n"
+            "   - **Bad Example (for 'average'):** `SELECT temperature_f FROM ...`\n"
+            "   - **Good Example (for 'top 5'):** `SELECT ... LIMIT 5`\n"
+
+            "**Handle 'average amount/number' queries:** If the user asks for the 'average amount' "
+               "or 'average number' of something (e.g., 'average amount of trips'), they likely want the "
+               "average of a daily count. This requires a nested query (a subquery or CTE).\n"
+               "   - **Example:** To get the 'average trips per day', you first count trips *per day* in a subquery, "
+               "     then take the `AVG` of those daily counts in the outer query.\n"
+               "   - **Example Query:** `SELECT AVG(daily_count) FROM (SELECT DATE(start_time), COUNT(*) as daily_count FROM ... GROUP BY DATE(start_time)) AS subquery`\n"
+
             "1. First, call the 'get_database_schema' tool.\n"
-            "2. Analyze the user question.\n"
+            "2. Analyze the user question and the new aggregation rules.\n"
             "3. **Always generate the SQL query using the units specified in the 'CRITICAL' instruction above.**\n"
             "4. **If the user's question includes a *different* unit** (e.g., they ask for 'miles' but the system unit is 'km'), "
                "**you must still use the 'CRITICAL' system units** for the SQL query.\n"
-            "5. **For location questions** (e.g., 'where', 'place'), you MUST use 'start_area_name' or 'end_area_name'.\n"
-            "6. Generate the PostgreSQL SELECT query.\n"
+            "5. **For location questions** (e.g., 'where', 'place'), you MUST use 'start_area_name' or 'end_area_name' (and likely `GROUP BY` and `COUNT`)\n"
+            "6. Generate the single, *aggregated* PostgreSQL SELECT query.\n"
             "7. **IMPORTANT: Alias the unit-dependent columns** to make it clear what unit you used (e.g., `AS avg_temp_c`, `AS total_distance_km`).\n"
             "8. Output ONLY the SQL query as plain text."
         ),
-        expected_output="A PostgreSQL SELECT query as plain text, using the system's required units and aliasing the output columns (e.g., AS avg_temp_c).",
+        expected_output="A *single, efficient, aggregated* PostgreSQL SELECT query as plain text, using `GROUP BY`, `COUNT`, `AVG`, etc. to return a small summary, not raw rows.",
         agent=sql_agent
     )
 
@@ -212,30 +236,31 @@ def create_crew(question: str, units: str):
         context=[task1]
     )
     # Task 3: Analyze & Summarize
+    # Make sure output is in plain english and easily readable
     task3 = Task(
         description=(
             f"Original question: {question}\n\n"
             f"**CRITICAL: You MUST report units using this rule:** {unit_pref_analysis}\n\n"
-            "Analyze the SQL results (from task 2) using the SQL query (from task 1) for context.\n"
-            "Follow this structure **exactly**:\n"
-            "1. **Direct Answer:** State the main number or finding directly in one sentence.\n"
-            "2. **Context/Meaning:** Add one or two simple sentences that put the answer into context.\n\n"
+            "Analyze the SQL results (from task 2) to answer the original question.\n\n"
             
             "**ULTRA-IMPORTANT RULES (DO NOT IGNORE):**\n"
-            "1. **YOU MUST USE THE UNITS from the 'CRITICAL' instruction.** "
-               "(e.g., if it says report in °C, you MUST use °C).\n"
-            "2. **The user's question might use different numbers** (e.g., 'below 0'). "
-               "**DO NOT** repeat the user's number. State the answer using the units "
-               "from the SQL query (e.g., '...when the temperature is below 0°C...').\n"
-            "3. **DO NOT CONVERT** the numbers you get from the SQL query. Report them *as-is*.\n"
-            "4. **DO NOT** explain *how* the query was made (e.g., 'The query filtered for...').\n"
-            "5. **DO NOT** use meta-commentary (e.g., 'This result answers the question...')."
+            "1. **Answer in one single, short sentence.** If a second sentence is *absolutely* necessary, it must not repeat the first.\n"
+            "2. **NEVER REPEAT THE ANSWER.**\n"
+            "   - **BAD (Repetitive):** 'The vendor with the most trips is Lime, with 1.69 miles. This means that Lime has the highest number of trips.'\n"
+            "   - **GOOD (Concise):** 'The vendor with the most trips is Lime, with an average distance of 1.69 miles.'\n"
+            "3. **NEVER** say 'This means that...', 'This indicates...', 'The data shows...', or 'Based on the query...'.\n"
+            "4. **JUST STATE THE FACT.** Start with the main finding.\n"
+            "5. **USE THE UNITS** from the 'CRITICAL' instruction and the data. Do not convert them."
         ),
-        expected_output="A short, natural language answer (2-3 sentences max) that gives the main "
-                        "answer and a single, simple insight about it, **using the correct metric or imperial units as requested AND NOT CONVERTING THEM.**",
+        expected_output=(
+            "A single, direct, natural-language sentence answering the question. "
+            "Example: 'Lime had the most trips, with an average distance of 1.69 miles.'"
+        ),
         agent=analyst_agent,
         context=[task1, task2]
     )
+    # --- END MODIFICATION ---
+
 
     crew = Crew(
         agents=[sql_agent, executor_agent, analyst_agent],
@@ -245,7 +270,6 @@ def create_crew(question: str, units: str):
     )
 
     return crew
-
 def answer_question(question: str, units: str = 'imperial'):
     """Answer a user question using the Crew pipeline with Groq."""
     if not question:
