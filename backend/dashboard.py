@@ -924,41 +924,36 @@ def update_weather_usage_chart(metric, unit_system):
             avg_duration=("trip_duration", "mean"),
             total_trips=("trip_distance", "count")
         ).reset_index()
-
-        # No melting needed for dual-axis manual construction
         
         fig = go.Figure()
 
-        # Trace 1: Distance (Left Y, Slot 1)
         fig.add_trace(go.Bar(
             x=bucket_stats['rain_bucket'],
             y=bucket_stats['avg_distance'],
             name=distance_label,
             yaxis='y1',
             offsetgroup=1,
-            marker_color='#636EFA',  # Plotly Blue
+            marker_color='#636EFA',  
             hovertemplate=f"<b>%{{x}}</b><br>{distance_label}: %{{y:.2f}} {unit_suffix}<extra></extra>"
         ))
 
-        # Trace 2: Duration (Left Y, Slot 2)
         fig.add_trace(go.Bar(
             x=bucket_stats['rain_bucket'],
             y=bucket_stats['avg_duration'],
             name=duration_label,
             yaxis='y1',
             offsetgroup=2,
-            marker_color='#EF553B',  # Plotly Red
+            marker_color='#EF553B',  
             hovertemplate=f"<b>%{{x}}</b><br>{duration_label}: %{{y:.2f}} min<extra></extra>"
         ))
 
-        # Trace 3: Total Trips (Right Y, Slot 3)
         fig.add_trace(go.Bar(
             x=bucket_stats['rain_bucket'],
             y=bucket_stats['total_trips'],
             name='Total Trips',
             yaxis='y2',
             offsetgroup=3,
-            marker_color='#00CC96', # Plotly Green
+            marker_color='#00CC96', 
             hovertemplate="<b>%{x}</b><br>Total Trips: %{y:,}<extra></extra>"
         ))
 
